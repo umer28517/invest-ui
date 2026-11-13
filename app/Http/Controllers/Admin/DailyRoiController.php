@@ -35,8 +35,13 @@ class DailyRoiController extends Controller
             $startingBalance = (float) $user->balance;
             
             // Dynamic Effective Rate: Automatically upgrades if balance meets a higher tier threshold
-            // and never downgrades below the user's subscribed package rate
-            $rate = (float) $user->effective_daily_rate;
+            // and generates a random daily rate within that package's profit range (e.g. 2.0% - 3.0%)
+            $effectivePkg = $user->effective_package ?? $user->activePackage;
+            if ($effectivePkg && method_exists($effectivePkg, 'generateRandomDailyRate')) {
+                $rate = $effectivePkg->generateRandomDailyRate();
+            } else {
+                $rate = (float) $user->effective_daily_rate;
+            }
 
             if ($rate <= 0) {
                 continue;
@@ -72,30 +77,6 @@ class DailyRoiController extends Controller
                 'body' => "<p>Your 24-hour yield of <strong>+{$rate}%</strong> on your active balance of \${$startingBalance} has been compounded! <strong>+\${$profit} USD</strong> was added. Your new compounding balance is <strong>\${$newBalance} USD</strong>.</p>",
                 'is_read' => false,
             ]);
-
-            // Daily Referral Matching Commission: Credit configured percentage of downline yield to referrer
-            $referralCommissionPercent = (float) \App\Models\Setting::get('referral_commission_percent', 5.00);
-            if ($referralCommissionPercent > 0 && ! empty($user->referred_by)) {
-                $referrer = User::where('referral_code', $user->referred_by)
-                    ->where('is_active', true)
-                    ->first();
-
-                if ($referrer) {
-                    $refBonus = round($profit * ($referralCommissionPercent / 100), 2);
-                    if ($refBonus > 0) {
-                        $referrer->balance = round((float) $referrer->balance + $refBonus, 2);
-                        $referrer->save();
-
-                        UserNotification::create([
-                            'user_id' => $referrer->id,
-                            'title' => "Daily Referral Commission: +\${$refBonus} USD",
-                            'type' => 'bonus',
-                            'body' => "<p>You earned a daily matching commission of <strong>+\${$refBonus} USD</strong> ({$referralCommissionPercent}% of 24h yield) from your referred member <strong>{$user->name}</strong>.</p>",
-                            'is_read' => false,
-                        ]);
-                    }
-                }
-            }
 
             $totalDistributed += $profit;
             $accountsProcessed++;

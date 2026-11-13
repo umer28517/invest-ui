@@ -54,12 +54,17 @@ class DepositApprovalController extends Controller
 
         $user = $deposit->user;
 
+        // Apply Deposit Fee (default 0.00 in tests, 2.00% when configured)
+        $depositFeePercent = (float) \App\Models\Setting::get('deposit_fee_percent', 0.00);
+        $depositFee = round(((float) $deposit->amount * $depositFeePercent) / 100, 2);
+        $netDeposit = round((float) $deposit->amount - $depositFee, 2);
+
         // Add deposit to user's compounding balance
-        $user->balance = round((float) $user->balance + (float) $deposit->amount, 2);
+        $user->balance = round((float) $user->balance + $netDeposit, 2);
         
-        // Track locked base principal and set 30-day lock window
-        $user->locked_principal = round((float) $user->locked_principal + (float) $deposit->amount, 2);
-        $user->locked_until = now()->addDays(30);
+        // Track locked base principal and set 45-day lock window
+        $user->locked_principal = round((float) $user->locked_principal + $netDeposit, 2);
+        $user->locked_until = now()->addDays(45);
 
         // Ensure user retains their highest tier percentage and never gets downgraded
         if ((float) $deposit->daily_rate >= (float) $user->active_daily_rate) {
@@ -69,18 +74,19 @@ class DepositApprovalController extends Controller
 
         $user->save();
 
-        // Notify investor of approval and 30-day lock
+        // Notify investor of approval and 45-day lock
         $unlockDate = $user->locked_until->format('M d, Y');
+        $feeText = $depositFee > 0 ? " (Deposit Fee: \${$depositFee} [{$depositFeePercent}%], Net Credited: \${$netDeposit} USD)" : "";
         UserNotification::create([
             'user_id' => $user->id,
             'title' => "🎉 Package Activated: {$deposit->package->name} (+{$deposit->daily_rate}%/day)",
             'type' => 'bonus',
-            'body' => "<p>Your payment of <strong>\${$deposit->amount} USD</strong> has been approved! Your <strong>{$deposit->package->name}</strong> plan is now active with <strong>+{$deposit->daily_rate}% daily compounding</strong> on your total balance.</p><p class='mt-1 text-xs text-amber-300'>Note: Base deposit of \${$deposit->amount} is locked for 30 days until <strong>{$unlockDate}</strong>. All accrued daily profits above base deposit can be withdrawn anytime (\$10 min)!</p>",
+            'body' => "<p>Your payment of <strong>\${$deposit->amount} USD</strong>{$feeText} has been approved! Your <strong>{$deposit->package->name}</strong> plan is now active with <strong>+{$deposit->daily_rate}% daily compounding</strong> on your total balance.</p><p class='mt-1 text-xs text-amber-300'>Note: Base deposit of \${$netDeposit} is locked for 45 days until <strong>{$unlockDate}</strong>. All accrued daily profits above base deposit can be withdrawn anytime (\$10 min)!</p>",
             'is_read' => false,
         ]);
 
-        // Referral Commission Bonus on Investment / Deposit
-        $referralCommissionPercent = (float) \App\Models\Setting::get('referral_commission_percent', 5.00);
+        // 1-Time Referral Commission Bonus on Investment / Deposit
+        $referralCommissionPercent = (float) ($deposit->package->referral_commission_percent ?? \App\Models\Setting::get('referral_commission_percent', 5.00));
         if ($referralCommissionPercent > 0 && ! empty($user->referred_by)) {
             $referrer = \App\Models\User::where('referral_code', $user->referred_by)
                 ->where('is_active', true)

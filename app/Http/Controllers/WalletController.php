@@ -30,6 +30,11 @@ class WalletController extends Controller
     {
         $user = $request->user();
 
+        // 0. Active Package Requirement: Must have an active package to withdraw funds/commissions
+        if (! $user->active_package_id && ! $user->deposits()->where('status', 'approved')->exists()) {
+            return back()->with('error', 'Active Package Required: You must have at least one active investment package to withdraw your balance or referral commissions. Please activate a package tier first.');
+        }
+
         // 1. Check withdrawable balance taking into account 30-day principal lock
         $maxWithdrawable = $user->getWithdrawableBalance();
 
@@ -37,7 +42,7 @@ class WalletController extends Controller
             if ($user->isCapitalLocked()) {
                 $daysLeft = $user->daysRemainingLocked();
                 $unlockDate = $user->locked_until->format('M d, Y');
-                return back()->with('error', "Capital Lock Policy: Your base deposit of \${$user->locked_principal} is locked for 30 days until {$unlockDate} ({$daysLeft} day(s) remaining). Accrued daily profits above the base deposit can be withdrawn anytime once they reach \$10.00 (Current withdrawable profit: \${$maxWithdrawable} USD).");
+                return back()->with('error', "Capital Lock Policy: Your base deposit of \${$user->locked_principal} is locked for 45 days until {$unlockDate} ({$daysLeft} day(s) remaining). Accrued daily profits above the base deposit can be withdrawn anytime once they reach \$10.00 (Current withdrawable profit: \${$maxWithdrawable} USD).");
             }
 
             return back()->with('error', 'The minimum cashout limit is $10.00 USD. Your current available balance is $' . number_format($maxWithdrawable, 2) . ' USD.');

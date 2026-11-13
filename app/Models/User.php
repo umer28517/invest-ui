@@ -85,16 +85,74 @@ class User extends Authenticatable
      * Get maximum balance withdrawable right now.
      * During 30-day lock: Base principal is protected, accrued daily profit can be withdrawn.
      * After 30 days: Full balance is withdrawable.
+     * While in trade: Frozen balance is temporarily deducted from withdrawable funds.
      */
     public function getWithdrawableBalance(): float
     {
-        $currentBalance = (float) $this->balance;
+        $currentBalance = max(0, (float) $this->balance - (float) ($this->frozen_balance ?? 0));
         if ($this->isCapitalLocked()) {
             $withdrawable = max(0, $currentBalance - (float) $this->locked_principal);
             return round($withdrawable, 2);
         }
 
         return round($currentBalance, 2);
+    }
+
+    /**
+     * User's trade sessions history.
+     */
+    public function tradeSessions(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(TradeSession::class);
+    }
+
+    /**
+     * Active ongoing trade session, if any.
+     */
+    public function activeTradeSession(): ?TradeSession
+    {
+        return $this->tradeSessions()->where('status', 'running')->latest()->first();
+    }
+
+    /**
+     * Check if a 30-minute trade session is actively in progress.
+     */
+    public function isTradeRunning(): bool
+    {
+        return $this->trade_active_until !== null && now()->lessThan($this->trade_active_until);
+    }
+
+    /**
+     * Whether user is eligible to initiate a 24-hour cycle trade right now.
+     */
+    public function canTrade(): bool
+    {
+        $hasActivePackage = $this->active_package_id !== null || $this->deposits()->where('status', 'approved')->exists();
+        if (! $hasActivePackage || (float) $this->balance <= 0) {
+            return false;
+        }
+
+        if ($this->isTradeRunning()) {
+            return false;
+        }
+
+        if ($this->next_trade_available_at !== null && now()->lessThan($this->next_trade_available_at)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Seconds remaining in 24-hour cooling window.
+     */
+    public function secondsUntilNextTrade(): int
+    {
+        if ($this->next_trade_available_at === null || now()->greaterThanOrEqualTo($this->next_trade_available_at)) {
+            return 0;
+        }
+
+        return max(0, now()->diffInSeconds($this->next_trade_available_at, false));
     }
 
     /**
